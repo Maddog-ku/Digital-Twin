@@ -1,3 +1,4 @@
+// 管理住家數據和狀態的核心 Context
 import React, { createContext, useState, useContext } from 'react';
 
 // 初始數據結構：代表住家的數位孿生
