@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
-from sqlalchemy import Column, String, Float, Boolean, ForeignKey
+from sqlalchemy import Column, String, Float, Boolean, ForeignKey, DateTime, Text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql import func
 from sqlalchemy.orm import declarative_base, relationship
 
 # SQLAlchemy 模型基礎
@@ -49,6 +51,25 @@ class HomeTwinModel(Base):
     # 配置 (單列，PK 固定為 'main_home_config')
     home_id = Column(String, primary_key=True)
     security_status = Column(String, default='Safe')
+
+
+class HomeMeshModel(Base):
+    """生成後的 3D Mesh 資料 (對應 PostgreSQL 的 home_meshes 表)"""
+    __tablename__ = 'home_meshes'
+
+    id = Column(String, primary_key=True)
+    home_id = Column(String, nullable=False, index=True)
+
+    # mesh_json_v2: 自訂 JSON（floor/walls/ceiling + metadata）
+    # gltf_url/obj_url: 外部模型檔案連結
+    mesh_format = Column(String, nullable=False, default='mesh_json_v2')
+    mesh_data = Column(JSONB, nullable=False)  # JSONB
+
+    # 可選：保存生成用的 2D 輸入與參數 (便於追溯/重算)
+    source_2d = Column(JSONB, nullable=True)  # JSONB
+    params = Column(JSONB, nullable=True)  # JSONB
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 # --- 服務層使用的 Python 數據類 (您原來的 DataClass 定義) ---
 @dataclass

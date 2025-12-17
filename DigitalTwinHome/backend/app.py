@@ -6,8 +6,14 @@ from threading import Lock
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_socketio import SocketIO
+try:
+    # pydantic v2 compatibility layer
+    from pydantic.v1 import ValidationError
+except ImportError:  # pragma: no cover
+    from pydantic import ValidationError
 
 from core.twin_service import DigitalTwinService
+from core.schemas import Generate3DRequest
 from config import HOST, PORT
 
 load_dotenv()
@@ -51,7 +57,13 @@ def index():
     """存活檢查與可用端點"""
     return jsonify({
         "message": "Digital Twin backend is running",
-        "endpoints": ["/api/v1/home_config", "/api/v1/sensor_event"],
+        "endpoints": [
+            "/api/v1/home_config",
+            "/api/v1/sensor_event",
+            "/api/v1/generate_3d",
+            "/api/v1/3d_model/<mesh_id>",
+            "/api/v1/3d_model/latest?home_id=<home_id>",
+        ],
         "ws_namespace": "/twin",
         "ws_event": "sensor_update"
     })
@@ -88,6 +100,47 @@ def handle_sensor_event():
         return jsonify({"error": err}), 404
 
     return jsonify({"message": "sensor event applied", "update": update_payload})
+
+
+@app.route('/api/v1/generate_3d', methods=['POST'])
+def generate_3d():
+    """接收 2D 平面圖資料並生成 3D mesh (vertices/faces)。"""
+    payload = request.get_json(silent=True) or {}
+    try:
+        if hasattr(Generate3DRequest, "model_validate"):
+            request_model = Generate3DRequest.model_validate(payload)
+        else:
+            request_model = Generate3DRequest.parse_obj(payload)
+    except ValidationError as e:
+        return jsonify({"error": "invalid payload", "details": e.errors()}), 400
+
+    result, err = twin_service.generate_3d_model(request_model)
+    if err:
+        return jsonify({"error": err}), 400
+
+    return jsonify({"message": "3d mesh generated", "result": result})
+
+
+@app.route('/api/v1/3d_model/<mesh_id>', methods=['GET'])
+def get_3d_model(mesh_id: str):
+    """取得指定 mesh_id 的 3D mesh JSON。"""
+    result, err = twin_service.get_3d_model(mesh_id)
+    if err:
+        return jsonify({"error": err}), 404
+    return jsonify(result)
+
+
+@app.route('/api/v1/3d_model/latest', methods=['GET'])
+def get_latest_3d_model():
+    """取得指定 home_id 最新生成的 3D mesh JSON。"""
+    home_id = request.args.get("home_id")
+    if not home_id:
+        return jsonify({"error": "home_id is required"}), 400
+
+    result, err = twin_service.get_latest_3d_model_for_home(home_id)
+    if err:
+        return jsonify({"error": err}), 404
+    return jsonify(result)
 
 
 # --- SocketIO 事件處理 ---

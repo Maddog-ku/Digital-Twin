@@ -74,3 +74,4 @@ const RoomSettings = ({ roomId }) => {
 };
 
 export default RoomSettings;
+
