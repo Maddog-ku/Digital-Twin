@@ -6,6 +6,7 @@
 import { onBeforeUnmount, onMounted, watch, ref } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 
 const props = defineProps({
   meshData: { type: Object, default: null },
@@ -23,7 +24,10 @@ const container = ref(null)
 let renderer
 let scene
 let camera
-let controls
+let orbitControls
+let fpControls
+let controlMode = 'orbit'
+let clock
 let resizeObserver
 let animationId
 
@@ -35,6 +39,7 @@ let roomOverlayGroup
 let floorMesh = null
 let wallsMesh = null
 let ceilingMesh = null
+let layerMeshes = []
 
 const sensorMeshes = new Map()
 let sharedSensorGeometry = null
@@ -50,6 +55,7 @@ function initThree() {
 
   camera = new THREE.PerspectiveCamera(60, 1, 0.01, 2000)
   camera.position.set(6, 5, 6)
+  clock = new THREE.Clock()
 
   renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -62,10 +68,17 @@ function initThree() {
 
   container.value.appendChild(renderer.domElement)
 
-  controls = new OrbitControls(camera, renderer.domElement)
-  controls.enableDamping = true
-  controls.dampingFactor = 0.08
-  controls.target.set(0, 0, 0)
+  orbitControls = new OrbitControls(camera, renderer.domElement)
+  orbitControls.enableDamping = true
+  orbitControls.dampingFactor = 0.08
+  orbitControls.target.set(0, 0, 0)
+
+  fpControls = new FirstPersonControls(camera, renderer.domElement)
+  fpControls.enabled = false
+  fpControls.lookSpeed = 0.12
+  fpControls.movementSpeed = 2.5
+  fpControls.lookVertical = true
+  setControlMode(props.visibility?.cameraMode)
 
   const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x1b2a44, 0.75)
   scene.add(hemi)
@@ -142,6 +155,40 @@ function disposeRoomOverlays() {
   roomOverlayMeshes.clear()
 }
 
+function clearSensorMeshes() {
+  if (!sensorGroup) return
+  for (const [, mesh] of sensorMeshes.entries()) {
+    sensorGroup.remove(mesh)
+    if (mesh.material) mesh.material.dispose()
+  }
+  sensorMeshes.clear()
+}
+
+function clearScene() {
+  disposeMesh(floorMesh)
+  disposeMesh(wallsMesh)
+  disposeMesh(ceilingMesh)
+  floorMesh = null
+  wallsMesh = null
+  ceilingMesh = null
+
+  if (Array.isArray(layerMeshes) && layerMeshes.length && meshGroup) {
+    for (const entry of layerMeshes) {
+      if (!entry?.mesh) continue
+      meshGroup.remove(entry.mesh)
+      entry.mesh.geometry?.dispose()
+      if (entry.mesh.material) {
+        if (Array.isArray(entry.mesh.material)) entry.mesh.material.forEach((m) => m?.dispose())
+        else entry.mesh.material.dispose()
+      }
+    }
+  }
+  layerMeshes = []
+
+  disposeRoomOverlays()
+  clearSensorMeshes()
+}
+
 function makeMaterial(colorHex, { wireframe = false, opacity = 1.0 } = {}) {
   return new THREE.MeshStandardMaterial({
     color: colorHex,
@@ -154,23 +201,66 @@ function makeMaterial(colorHex, { wireframe = false, opacity = 1.0 } = {}) {
   })
 }
 
-function rebuildModel() {
-  disposeMesh(floorMesh)
-  disposeMesh(wallsMesh)
-  disposeMesh(ceilingMesh)
-  floorMesh = null
-  wallsMesh = null
-  ceilingMesh = null
-
-  disposeRoomOverlays()
-
-  if (!props.meshData) {
-    return
+function setControlMode(mode) {
+  const next = mode === 'first-person' ? 'first-person' : 'orbit'
+  controlMode = next
+  if (orbitControls) orbitControls.enabled = next === 'orbit'
+  if (fpControls) fpControls.enabled = next === 'first-person'
+  if (renderer?.domElement) {
+    renderer.domElement.style.cursor = next === 'first-person' ? 'crosshair' : 'auto'
   }
+}
+
+function rebuildModel() {
+  clearScene()
+
+  if (!props.meshData) return
 
   const wireframe = Boolean(props.visibility?.wireframe)
 
-  if (props.meshData.floor) {
+  if (Array.isArray(props.meshData.layers) && props.meshData.layers.length) {
+    const wallOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.wallOpacity ?? 1)))
+    const floorOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.floorOpacity ?? 1)))
+    const ceilingOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.ceilingOpacity ?? floorOpacity)))
+
+    for (const layer of props.meshData.layers) {
+      const zOffset = Number(layer?.z_offset || 0)
+
+      if (layer.floor) {
+        const geometry = buildGeometry(layer.floor)
+        const material = makeMaterial(0x2d6a4f, { wireframe, opacity: floorOpacity })
+        const mesh = new THREE.Mesh(geometry, material)
+        mesh.position.y = zOffset
+        mesh.receiveShadow = true
+        mesh.visible = Boolean(props.visibility?.floor)
+        meshGroup.add(mesh)
+        layerMeshes.push({ mesh, type: 'floor' })
+      }
+
+      if (layer.walls) {
+        const geometry = buildGeometry(layer.walls)
+        const material = makeMaterial(0xf3f4f6, { wireframe, opacity: wallOpacity })
+        const mesh = new THREE.Mesh(geometry, material)
+        mesh.position.y = zOffset
+        mesh.castShadow = true
+        mesh.receiveShadow = true
+        mesh.visible = Boolean(props.visibility?.walls)
+        meshGroup.add(mesh)
+        layerMeshes.push({ mesh, type: 'walls' })
+      }
+
+      if (layer.ceiling) {
+        const geometry = buildGeometry(layer.ceiling)
+        const material = makeMaterial(0xd1d5db, { wireframe, opacity: ceilingOpacity })
+        const mesh = new THREE.Mesh(geometry, material)
+        mesh.position.y = zOffset
+        mesh.receiveShadow = true
+        mesh.visible = Boolean(props.visibility?.ceiling)
+        meshGroup.add(mesh)
+        layerMeshes.push({ mesh, type: 'ceiling' })
+      }
+    }
+  } else if (props.meshData.floor) {
     const geometry = buildGeometry(props.meshData.floor)
     const material = makeMaterial(0x2d6a4f, { wireframe })
     floorMesh = new THREE.Mesh(geometry, material)
@@ -349,12 +439,13 @@ function fitCameraToModel() {
   const maxDim = Math.max(size.x, size.y, size.z)
   const dist = Math.max(2.5, maxDim * 1.5)
 
-  controls.target.copy(center)
+  orbitControls?.target.copy(center)
   camera.position.set(center.x + dist, center.y + dist * 0.7, center.z + dist)
   camera.near = 0.01
   camera.far = Math.max(200, dist * 10)
   camera.updateProjectionMatrix()
-  controls.update()
+  if (orbitControls) orbitControls.update()
+  else camera.lookAt(center)
 }
 
 function sensorColor(sensor) {
@@ -397,9 +488,14 @@ function updateSensors() {
     const location = sensor.location
     if (!Array.isArray(location) || location.length < 2) continue
 
-    const x = Number(location[0] || 0) - xOff
-    const y = Number(location[1] || 0) - yOff
-    const z = Number(location[2] || 0) - zOff + lift
+    const rawX = Number(location[0] || 0)
+    const rawY = Number(location[1] || 0)
+    const rawZ = Number(location[2] || 0)
+
+    // Align with backend z-up convention: place at [x - off.x, z, y - off.y]
+    const x = rawX - xOff
+    const y = rawZ - zOff + lift
+    const z = rawY - yOff
 
     let mesh = sensorMeshes.get(sensor.id)
     if (!mesh) {
@@ -433,10 +529,51 @@ function updateVisibility() {
   if (ceilingMesh) ceilingMesh.visible = Boolean(props.visibility?.ceiling)
   if (sensorGroup) sensorGroup.visible = Boolean(props.visibility?.sensors)
 
+  setControlMode(props.visibility?.cameraMode)
+
   const wireframe = Boolean(props.visibility?.wireframe)
   for (const mesh of [floorMesh, wallsMesh, ceilingMesh]) {
     if (!mesh) continue
     mesh.material.wireframe = wireframe
+  }
+
+  const wallOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.wallOpacity ?? 1)))
+  if (wallsMesh?.material) {
+    wallsMesh.material.opacity = wallOpacity
+    wallsMesh.material.transparent = wallOpacity < 1 || wallsMesh.material.wireframe
+  }
+
+  const floorOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.floorOpacity ?? 1)))
+  const ceilingOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.ceilingOpacity ?? floorOpacity)))
+
+  if (floorMesh?.material) {
+    floorMesh.material.opacity = floorOpacity
+    floorMesh.material.transparent = floorOpacity < 1 || floorMesh.material.wireframe
+  }
+  if (ceilingMesh?.material) {
+    ceilingMesh.material.opacity = ceilingOpacity
+    ceilingMesh.material.transparent = ceilingOpacity < 1 || ceilingMesh.material.wireframe
+  }
+
+  if (Array.isArray(layerMeshes) && layerMeshes.length) {
+    for (const entry of layerMeshes) {
+      const m = entry.mesh
+      if (!m?.material) continue
+      if (entry.type === 'floor') {
+        m.visible = Boolean(props.visibility?.floor)
+        m.material.opacity = floorOpacity
+        m.material.transparent = floorOpacity < 1 || m.material.wireframe
+      } else if (entry.type === 'walls') {
+        m.visible = Boolean(props.visibility?.walls)
+        m.material.opacity = wallOpacity
+        m.material.transparent = wallOpacity < 1 || m.material.wireframe
+      } else if (entry.type === 'ceiling') {
+        m.visible = Boolean(props.visibility?.ceiling)
+        m.material.opacity = ceilingOpacity
+        m.material.transparent = ceilingOpacity < 1 || m.material.wireframe
+      }
+      m.material.wireframe = wireframe
+    }
   }
 }
 
@@ -481,7 +618,12 @@ function onPointerDown(event) {
 
 function loop() {
   animationId = requestAnimationFrame(loop)
-  controls?.update()
+  const delta = clock ? clock.getDelta() : 0
+  if (controlMode === 'first-person') {
+    fpControls?.update(delta)
+  } else {
+    orbitControls?.update()
+  }
   updateRoomOverlayAnimation(performance.now())
   renderer?.render(scene, camera)
 }
@@ -501,18 +643,11 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   renderer?.domElement?.removeEventListener('pointerdown', onPointerDown)
 
-  for (const [, mesh] of sensorMeshes.entries()) {
-    if (mesh.material) mesh.material.dispose()
-  }
-  sensorMeshes.clear()
+  clearScene()
   sharedSensorGeometry?.dispose()
 
-  disposeMesh(floorMesh)
-  disposeMesh(wallsMesh)
-  disposeMesh(ceilingMesh)
-  disposeRoomOverlays()
-
-  controls?.dispose()
+  orbitControls?.dispose()
+  fpControls?.dispose()
   renderer?.dispose()
 
   if (renderer?.domElement && renderer.domElement.parentNode) {
@@ -522,7 +657,11 @@ onBeforeUnmount(() => {
 
 watch(
   () => props.meshData,
-  () => {
+  (val) => {
+    if (!val) {
+      clearScene()
+      return
+    }
     rebuildModel()
     rebuildRoomOverlays()
     updateVisibility()

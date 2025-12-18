@@ -68,6 +68,8 @@ class HomeMeshModel(Base):
     # 可選：保存生成用的 2D 輸入與參數 (便於追溯/重算)
     source_2d = Column(JSONB, nullable=True)  # JSONB
     params = Column(JSONB, nullable=True)  # JSONB
+    original_image_url = Column(String)  # 來源影像路徑或 URL
+    parsing_confidence = Column(Float)  # AI 解析信心分數
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

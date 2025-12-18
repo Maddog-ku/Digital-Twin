@@ -1,37 +1,37 @@
 <template>
   <div class="wrap">
     <div class="tabs">
-      <button :class="{ active: mode === 'form' }" @click="mode = 'form'">Form</button>
+      <button :class="{ active: mode === 'form' }" @click="mode = 'form'">表單</button>
       <button :class="{ active: mode === 'json' }" @click="mode = 'json'">JSON</button>
     </div>
 
     <div class="hint">
       <div class="mono">POST /api/v1/generate_3d</div>
       <div class="muted">
-        Define <span class="mono">rooms[].polygon</span> and <span class="mono">rooms[].openings</span>
-        then generate a mesh.
+        定義 <span class="mono">rooms[].polygon</span> 與 <span class="mono">rooms[].openings</span>
+        後即可產生模型。
       </div>
     </div>
 
     <div v-if="mode === 'form'" class="form">
       <div class="row">
         <label class="field">
-          <span>Room ID</span>
+          <span>房間 ID</span>
           <input v-model.trim="roomId" />
         </label>
         <label class="field">
-          <span>Name</span>
+          <span>名稱</span>
           <input v-model.trim="roomName" />
         </label>
       </div>
 
       <div class="row">
         <label class="field">
-          <span>Wall Height</span>
+          <span>牆高</span>
           <input v-model.number="wallHeight" type="number" step="0.1" min="0.1" />
         </label>
         <label class="field">
-          <span>Wall Thickness</span>
+          <span>牆厚</span>
           <input v-model.number="wallThickness" type="number" step="0.01" min="0.01" />
         </label>
       </div>
@@ -39,16 +39,16 @@
       <div class="row">
         <label class="check">
           <input v-model="useCsg" type="checkbox" />
-          Use CSG (trimesh+shapely)
+          使用 CSG（trimesh + shapely）
         </label>
       </div>
 
       <div class="section">
         <div class="sectionHead">
-          <div class="title">Polygon (x, y)</div>
+          <div class="title">多邊形（x, y）</div>
           <div class="actions">
-            <button @click="addPoint">Add Point</button>
-            <button @click="autoFitPolygon">Auto-fit to sensors</button>
+            <button @click="addPoint">新增座標點</button>
+            <button @click="autoFitPolygon">依感測器自動推算</button>
           </div>
         </div>
 
@@ -66,9 +66,9 @@
 
       <div class="section">
         <div class="sectionHead">
-          <div class="title">Openings (doors/windows)</div>
+          <div class="title">開口（門/窗）</div>
           <div class="actions">
-            <button @click="addOpening">Add</button>
+            <button @click="addOpening">新增</button>
           </div>
         </div>
 
@@ -76,34 +76,34 @@
           <div v-for="(op, idx) in openings" :key="op.id" class="opening">
             <div class="openingHead">
               <div class="mono">{{ op.id }}</div>
-              <button class="danger" @click="removeOpening(idx)">Remove</button>
+              <button class="danger" @click="removeOpening(idx)">移除</button>
             </div>
             <div class="grid">
               <label>
-                <span>Type</span>
+                <span>類型</span>
                 <select v-model="op.type">
-                  <option value="door">door</option>
-                  <option value="window">window</option>
+                  <option value="door">門</option>
+                  <option value="window">窗</option>
                 </select>
               </label>
               <label>
-                <span>Center X</span>
+                <span>中心 X</span>
                 <input v-model.number="op.cx" type="number" step="0.1" />
               </label>
               <label>
-                <span>Center Y</span>
+                <span>中心 Y</span>
                 <input v-model.number="op.cy" type="number" step="0.1" />
               </label>
               <label>
-                <span>Width</span>
+                <span>寬度</span>
                 <input v-model.number="op.width" type="number" step="0.1" min="0.01" />
               </label>
               <label>
-                <span>Height</span>
+                <span>高度</span>
                 <input v-model.number="op.height" type="number" step="0.1" min="0.01" />
               </label>
               <label>
-                <span>Bottom</span>
+                <span>底部高度</span>
                 <input v-model.number="op.bottom" type="number" step="0.1" min="0" />
               </label>
             </div>
@@ -113,14 +113,14 @@
 
       <div class="cta">
         <button :disabled="submitting || !formReady" class="primary" @click="generate(formPayload)">
-          {{ submitting ? 'Generating…' : 'Generate 3D' }}
+          {{ submitting ? '產生中…' : '產生 3D' }}
         </button>
-        <button :disabled="submitting" @click="copyPreviewJson">Copy JSON</button>
-        <button :disabled="submitting" @click="resetForm">Reset</button>
+        <button :disabled="submitting" @click="copyPreviewJson">複製 JSON</button>
+        <button :disabled="submitting" @click="resetForm">重設</button>
       </div>
 
       <details class="details">
-        <summary>Payload preview</summary>
+        <summary>請求內容預覽</summary>
         <pre class="mono">{{ previewJson }}</pre>
       </details>
     </div>
@@ -128,14 +128,14 @@
     <div v-else class="json">
       <div class="row">
         <input ref="fileInput" class="file" type="file" accept="application/json" @change="onFile" />
-        <button @click="setJsonTemplate">Load template</button>
+        <button @click="setJsonTemplate">載入範例</button>
       </div>
 
       <textarea v-model="jsonText" class="textarea mono" spellcheck="false"></textarea>
 
       <div class="cta">
         <button :disabled="submitting" class="primary" @click="generateFromJson">
-          {{ submitting ? 'Generating…' : 'Generate 3D' }}
+          {{ submitting ? '產生中…' : '產生 3D' }}
         </button>
       </div>
     </div>
@@ -167,7 +167,7 @@ const wallThickness = ref(0.12)
 const useCsg = ref(false)
 
 const roomId = ref('room_1')
-const roomName = ref('Room')
+const roomName = ref('房間')
 
 const polygon = ref([
   { x: 0, y: 0 },
@@ -238,7 +238,7 @@ function removeOpening(index) {
 
 function resetForm() {
   roomId.value = 'room_1'
-  roomName.value = 'Room'
+  roomName.value = '房間'
   wallHeight.value = 2.8
   wallThickness.value = 0.12
   useCsg.value = false
@@ -290,13 +290,13 @@ async function generate(payload) {
   try {
     const resp = await api.generate3D(payload)
     const meshId = resp?.result?.mesh_id
-    if (!meshId) throw new Error('mesh_id missing from /generate_3d response')
+    if (!meshId) throw new Error('回應缺少 mesh_id（/generate_3d）')
 
     const model = await api.get3DModel(meshId)
-    status.value = `generated: ${meshId}`
+    status.value = `已產生：${meshId}`
     emit('generated', model)
   } catch (e) {
-    error.value = e?.response?.data?.error || e?.message || 'Failed to generate 3D'
+    error.value = e?.response?.data?.error || e?.message || '產生 3D 失敗'
   } finally {
     submitting.value = false
   }
@@ -304,17 +304,17 @@ async function generate(payload) {
 
 function copyPreviewJson() {
   navigator.clipboard?.writeText(previewJson.value)
-  status.value = 'copied payload JSON'
+  status.value = '已複製 JSON 請求內容'
 }
 
 function parseJsonText() {
   try {
     const obj = JSON.parse(jsonText.value || '')
-    if (!obj || typeof obj !== 'object') throw new Error('payload must be a JSON object')
+    if (!obj || typeof obj !== 'object') throw new Error('請求內容必須為 JSON 物件')
     if (!obj.home_id) obj.home_id = props.homeId
     return obj
   } catch (e) {
-    throw new Error(e?.message || 'Invalid JSON')
+    throw new Error(e?.message || 'JSON 格式無效')
   }
 }
 
@@ -323,7 +323,7 @@ async function generateFromJson() {
     const payload = parseJsonText()
     await generate(payload)
   } catch (e) {
-    error.value = e?.message || 'Invalid JSON'
+    error.value = e?.message || 'JSON 格式無效'
   }
 }
 
@@ -680,4 +680,3 @@ textarea {
   }
 }
 </style>
-

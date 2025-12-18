@@ -45,6 +45,8 @@ class Opening2D(BaseModel):
 class Room2DInput(BaseModel):
     id: str
     name: Optional[str] = None
+    level: Optional[int] = Field(default=None, description="樓層編號（1-based），用於堆疊")
+    z_offset: float = Field(default=0.0, description="以公尺計的 Z 偏移，用於樓層堆疊")
     polygon: conlist(Vec2, min_items=3) = Field(
         description="Room outer boundary as a ring of [x,y] points; last point may repeat the first.",
     )
@@ -72,6 +74,12 @@ class Room2DInput(BaseModel):
         return [_normalize_ring(ring) if isinstance(ring, list) else ring for ring in value]
 
 
+class MeshPart(BaseModel):
+    """單一幾何部分的頂點/面定義"""
+    vertices: List[Vec3] = Field(..., description="頂點座標列表 [[x,y,z], ...]")
+    faces: List[Tri] = Field(..., description="面片索引列表 [[v1,v2,v3], ...]")
+
+
 class MeshGenerationParams(BaseModel):
     wall_height: float = Field(default=2.8, gt=0)
     wall_thickness: float = Field(default=0.12, gt=0)
@@ -92,11 +100,13 @@ class Generate3DRequest(BaseModel):
 
 
 class MeshData(BaseModel):
-    class MeshPart(BaseModel):
-        vertices: List[Vec3]
-        faces: List[Tri]
-
+    """完整的 3D 網格數據包"""
     floor: MeshPart
     walls: MeshPart
-    ceiling: MeshPart
+    ceiling: Optional[MeshPart] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+# 解決 ForwardRef 造成的欄位未準備好問題
+MeshData.update_forward_refs()
+Generate3DRequest.update_forward_refs()

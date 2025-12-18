@@ -20,7 +20,7 @@ from .models import (
     Base, HomeTwinModel, RoomModel, SensorModel, HomeMeshModel
 )
 
-from .schemas import Generate3DRequest, MeshData
+from .schemas import Generate3DRequest, MeshData, MeshPart
 # 引入配置
 from config import (
     INITIAL_HOME_CONFIG,
@@ -41,7 +41,7 @@ class DigitalTwinService:
     _instance: Optional['DigitalTwinService'] = None
     _lock = Lock()
 
-    def __new__(cls):
+    def __new__(cls, *args, **kwargs):
         """實作單例模式"""
         with cls._lock:
             if cls._instance is None:
@@ -78,6 +78,10 @@ class DigitalTwinService:
         """初始化 ORM 連線、創建表格並載入/設定配置"""
         if self._is_initialized:
             return
+
+        # 確保 logger 已設定（即便 __init__ 省略或 logger=None）
+        if not getattr(self, "logger", None):
+            self.logger = logging.getLogger('digital_twin_service')
 
         self.logger.info("Connecting to PostgreSQL...")
         try:
@@ -336,6 +340,9 @@ class DigitalTwinService:
         mesh_dict = self._pydantic_dump(mesh)
         request_dict = self._pydantic_dump(request_model)
         params_dict = self._pydantic_dump(request_model.params)
+        image_meta = request_model.metadata or {}
+        original_image_url = image_meta.get("original_image_url") or image_meta.get("image_url")
+        parsing_confidence = image_meta.get("parsing_confidence")
 
         persisted = False
         if self.Session:
@@ -348,6 +355,8 @@ class DigitalTwinService:
                     mesh_data=mesh_dict,
                     source_2d=request_dict,
                     params=params_dict,
+                    original_image_url=original_image_url,
+                    parsing_confidence=parsing_confidence,
                 )
                 session.add(mesh_db)
                 session.commit()
@@ -373,6 +382,8 @@ class DigitalTwinService:
                     "params": params_dict,
                     "created_at": created_at,
                     "created_at_ts": created_at_ts,
+                    "original_image_url": original_image_url,
+                    "parsing_confidence": parsing_confidence,
                 }
 
         response = {
@@ -380,6 +391,8 @@ class DigitalTwinService:
             "home_id": request_model.home_id,
             "mesh_format": "mesh_json_v2",
             "world_offset": (mesh_dict.get("metadata") or {}).get("world_offset"),
+            "original_image_url": original_image_url,
+            "parsing_confidence": parsing_confidence,
             "parts": {
                 "floor": {
                     "vertex_count": len(mesh.floor.vertices),
@@ -394,6 +407,105 @@ class DigitalTwinService:
                     "face_count": len(mesh.ceiling.faces),
                 },
             },
+            "model_endpoint": f"/api/v1/3d_model/{mesh_id}",
+            "persisted": persisted,
+        }
+        return response, None
+
+    def add_floor_level(
+        self,
+        request_model: Generate3DRequest,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """生成單層 mesh，並將結果堆疊到最新的 home mesh list 內。"""
+        try:
+            mesh = self._generate_3d_mesh(request_model)
+        except Exception as e:
+            self.logger.exception("Floor mesh generation failed")
+            return None, str(e)
+
+        room_meta = request_model.rooms[0] if request_model.rooms else None
+        level = getattr(room_meta, "level", None)
+        z_offset = float(getattr(room_meta, "z_offset", 0.0) or (request_model.metadata or {}).get("z_offset", 0.0) or 0.0)
+        floor_height = float(
+            getattr(room_meta, "height", request_model.params.wall_height)
+        )
+
+        new_entry = {
+            "level": level,
+            "z_offset": z_offset,
+            "height": floor_height,
+            "mesh": self._pydantic_dump(mesh),
+            "metadata": {
+                "params": self._pydantic_dump(request_model.params),
+                "rooms": getattr(mesh, "metadata", {}).get("rooms") if hasattr(mesh, "metadata") else {},
+                "source": request_model.metadata or {},
+            },
+        }
+
+        existing_stack: List[Dict[str, Any]] = []
+        existing_meta: Dict[str, Any] = {}
+        latest, _ = self.get_latest_3d_model_for_home(request_model.home_id)
+        if latest and isinstance(latest.get("data"), list):
+            existing_stack = latest["data"]
+            existing_meta = latest.get("metadata") or {}
+
+        merged_stack = list(existing_stack)
+        merged_stack.append(new_entry)
+
+        mesh_id = str(uuid4())
+        original_image_url = (request_model.metadata or {}).get("original_image_url")
+        parsing_confidence = (request_model.metadata or {}).get("parsing_confidence")
+
+        persisted = False
+        if self.Session:
+            session: Session = self.Session()
+            try:
+                mesh_db = HomeMeshModel(
+                    id=mesh_id,
+                    home_id=request_model.home_id,
+                    mesh_format="stacked_mesh_v1",
+                    mesh_data=merged_stack,
+                    source_2d=[self._pydantic_dump(r) for r in request_model.rooms],
+                    params=self._pydantic_dump(request_model.params),
+                    original_image_url=original_image_url,
+                    parsing_confidence=parsing_confidence,
+                )
+                session.add(mesh_db)
+                session.commit()
+                persisted = True
+            except SQLAlchemyError as e:
+                session.rollback()
+                self.logger.error(
+                    f"PostgreSQL Persistence Error (floor stack): {e}. Falling back to memory store."
+                )
+            finally:
+                session.close()
+
+        if not persisted:
+            created_at_ts = time.time()
+            created_at = datetime.now(timezone.utc).isoformat()
+            with self.data_lock:
+                self.mesh_store[mesh_id] = {
+                    "id": mesh_id,
+                    "home_id": request_model.home_id,
+                    "mesh_format": "stacked_mesh_v1",
+                    "mesh_data": merged_stack,
+                    "source_2d": [self._pydantic_dump(r) for r in request_model.rooms],
+                    "params": self._pydantic_dump(request_model.params),
+                    "created_at": created_at,
+                    "created_at_ts": created_at_ts,
+                    "original_image_url": original_image_url,
+                    "parsing_confidence": parsing_confidence,
+                }
+
+        response = {
+            "mesh_id": mesh_id,
+            "home_id": request_model.home_id,
+            "mesh_format": "stacked_mesh_v1",
+            "floors_count": len(merged_stack),
+            "levels": [entry.get("level") for entry in merged_stack],
+            "original_image_url": original_image_url,
+            "parsing_confidence": parsing_confidence,
             "model_endpoint": f"/api/v1/3d_model/{mesh_id}",
             "persisted": persisted,
         }
@@ -419,6 +531,9 @@ class DigitalTwinService:
                         "mesh_format": mesh_db.mesh_format,
                         "data": mesh_payload,
                         "created_at": mesh_db.created_at.isoformat() if mesh_db.created_at else None,
+                        "original_image_url": mesh_db.original_image_url,
+                        "parsing_confidence": mesh_db.parsing_confidence,
+                        "metadata": getattr(mesh_payload, "metadata", None) if isinstance(mesh_payload, dict) else None,
                     },
                     None,
                 )
@@ -438,6 +553,8 @@ class DigitalTwinService:
                     "mesh_format": mesh["mesh_format"],
                     "data": mesh["mesh_data"],
                     "created_at": mesh.get("created_at"),
+                    "original_image_url": mesh.get("original_image_url"),
+                    "parsing_confidence": mesh.get("parsing_confidence"),
                 },
                 None,
             )
@@ -468,6 +585,9 @@ class DigitalTwinService:
                         "mesh_format": mesh_db.mesh_format,
                         "data": mesh_payload,
                         "created_at": mesh_db.created_at.isoformat() if mesh_db.created_at else None,
+                        "original_image_url": mesh_db.original_image_url,
+                        "parsing_confidence": mesh_db.parsing_confidence,
+                        "metadata": getattr(mesh_payload, "metadata", None) if isinstance(mesh_payload, dict) else None,
                     },
                     None,
                 )
@@ -488,6 +608,9 @@ class DigitalTwinService:
                     "mesh_format": latest["mesh_format"],
                     "data": latest["mesh_data"],
                     "created_at": latest.get("created_at"),
+                    "original_image_url": latest.get("original_image_url"),
+                    "parsing_confidence": latest.get("parsing_confidence"),
+                    "metadata": None,
                 },
                 None,
             )
@@ -540,17 +663,20 @@ class DigitalTwinService:
                     f"Room '{room.id}' polygon triangulation failed (non-simple polygon or unsupported geometry)."
                 )
 
-            # Floor (Z = 0) - face upward (+Z)
+            room_z_offset = float(getattr(room, "z_offset", 0.0) or 0.0)
+            base_z = room_z_offset - z_offset
+
+            # Floor (Z = base_z) - face upward (+Z)
             floor_vertex_offset = len(floor_vertices)
-            floor_vertices.extend([(x - x_offset, y - y_offset, 0.0 - z_offset) for x, y in ring_2d])
+            floor_vertices.extend([(x - x_offset, y - y_offset, base_z) for x, y in ring_2d])
             floor_faces.extend(
                 [(a + floor_vertex_offset, b + floor_vertex_offset, c + floor_vertex_offset) for a, b, c in triangles_2d]
             )
 
-            # Ceiling (Z = room_height) - face downward (-Z) so it's visible from inside
+            # Ceiling (Z = base_z + room_height) - face downward (-Z) so it's visible from inside
             ceiling_vertex_offset = len(ceiling_vertices)
             ceiling_vertices.extend(
-                [(x - x_offset, y - y_offset, room_height - z_offset) for x, y in ring_2d]
+                [(x - x_offset, y - y_offset, base_z + room_height) for x, y in ring_2d]
             )
             ceiling_faces.extend(
                 [
@@ -570,7 +696,7 @@ class DigitalTwinService:
                     openings=list(room.openings),
                     x_offset=x_offset,
                     y_offset=y_offset,
-                    z_offset=z_offset,
+                    z_offset=base_z,
                 )
                 if room_walls_part is not None:
                     csg_summary["used"] = True
@@ -584,7 +710,7 @@ class DigitalTwinService:
                     openings=list(room.openings),
                     x_offset=x_offset,
                     y_offset=y_offset,
-                    z_offset=z_offset,
+                    z_offset=base_z,
                     walls_override=list(room.walls),
                 )
 
@@ -615,9 +741,9 @@ class DigitalTwinService:
             metadata["csg"] = csg_summary
 
         return MeshData(
-            floor=MeshData.MeshPart(vertices=floor_vertices, faces=floor_faces),
-            walls=MeshData.MeshPart(vertices=walls_vertices, faces=walls_faces),
-            ceiling=MeshData.MeshPart(vertices=ceiling_vertices, faces=ceiling_faces),
+            floor=MeshPart(vertices=floor_vertices, faces=floor_faces),
+            walls=MeshPart(vertices=walls_vertices, faces=walls_faces),
+            ceiling=MeshPart(vertices=ceiling_vertices, faces=ceiling_faces),
             metadata=metadata,
         )
 

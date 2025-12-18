@@ -1,40 +1,40 @@
 <template>
   <div class="wrap">
     <div class="section">
-      <div class="k">Security</div>
+      <div class="k">安全狀態</div>
       <div class="v">
-        <span class="pill" :class="statusClass">{{ securityStatus || 'unknown' }}</span>
+        <span class="pill" :class="statusClass">{{ displaySecurityStatus }}</span>
       </div>
     </div>
 
     <div class="section">
-      <div class="k">Mesh</div>
+      <div class="k">模型</div>
       <div class="v">
         <div v-if="meshInfo?.mesh_id">
           <div class="mono">{{ meshInfo.mesh_id }}</div>
           <div class="muted">{{ meshInfo.created_at || '' }}</div>
         </div>
-        <div v-else class="muted">No mesh loaded</div>
+        <div v-else class="muted">尚未載入模型</div>
       </div>
     </div>
 
     <div class="section">
-      <div class="k">World Offset</div>
+      <div class="k">世界座標偏移</div>
       <div class="v mono">
         x={{ fmt(worldOffset?.x) }}, y={{ fmt(worldOffset?.y) }}, z={{ fmt(worldOffset?.z) }}
       </div>
     </div>
 
     <div class="section">
-      <div class="k">Connection</div>
+      <div class="k">連線狀態</div>
       <div class="v muted">
-        API: {{ connected?.api ? 'ok' : '—' }} · Socket: {{ connected?.socket ? 'ok' : '—' }}
+        API: {{ connected?.api ? '正常' : '—' }} · Socket: {{ connected?.socket ? '正常' : '—' }}
       </div>
     </div>
 
     <div class="section">
-      <div class="k">Rooms</div>
-      <div class="v muted">{{ rooms.length }} total · {{ sensors.length }} sensors</div>
+      <div class="k">房間</div>
+      <div class="v muted">共 {{ rooms.length }} 間 · {{ sensors.length }} 個感測器</div>
     </div>
 
     <div class="rooms">
@@ -47,22 +47,22 @@
       >
         <div class="roomTop">
           <div class="roomName">{{ room.name || room.id }}</div>
-          <div v-if="room.alertCount > 0" class="badge">ALERT</div>
+          <div v-if="room.alertCount > 0" class="badge">警報</div>
         </div>
         <div class="roomMeta muted">
-          {{ room.sensors.length }} sensors · {{ room.alertCount }} alert
+          {{ room.sensors.length }} 個感測器 · {{ room.alertCount }} 則警報
         </div>
       </button>
     </div>
 
     <div class="section">
-      <div class="k">Selected</div>
+      <div class="k">已選擇</div>
       <div class="v">
         <div v-if="selectedRoom" class="selectedTitle">
           <div class="mono">{{ selectedRoom.id }}</div>
           <div class="muted">{{ selectedRoom.name || '' }}</div>
         </div>
-        <div v-else class="muted">Click a room in 3D or select above.</div>
+        <div v-else class="muted">請在 3D 視圖點選房間，或在上方列表選擇。</div>
       </div>
     </div>
 
@@ -77,7 +77,9 @@
         <div class="meta">
           <div class="line">
             <span class="type">{{ sensor.type }}</span>
-            <span class="room muted">· {{ sensor.room_name || sensor.room_id || 'unknown room' }}</span>
+            <span class="room muted"
+              >· {{ sensor.room_name || sensor.room_id || '未知房間' }}</span
+            >
           </div>
           <div class="status">{{ sensor.status }}</div>
           <div class="loc mono muted">
@@ -88,7 +90,7 @@
     </div>
 
     <div v-if="errors?.length" class="errors">
-      <div class="k">Errors</div>
+      <div class="k">錯誤</div>
       <div v-for="(e, idx) in errors" :key="idx" class="err mono">
         {{ e }}
       </div>
@@ -120,6 +122,16 @@ const statusClass = computed(() => {
   return 'unknown'
 })
 
+const displaySecurityStatus = computed(() => {
+  const labels = {
+    safe: '安全',
+    warning: '警告',
+    critical: '危險',
+  }
+  const key = (props.securityStatus || '').toLowerCase()
+  return labels[key] || props.securityStatus || '未知'
+})
+
 const selectedRoom = computed(() => {
   if (!props.selectedRoomId) return null
   return props.rooms.find((r) => String(r.id) === String(props.selectedRoomId)) || null
@@ -132,9 +144,9 @@ function fmt(value) {
 }
 
 function fmtLoc(location) {
-  if (!location || !Array.isArray(location) || location.length < 2) return 'loc: —'
+  if (!location || !Array.isArray(location) || location.length < 2) return '位置：—'
   const [x, y, z = 0] = location
-  return `loc: [${fmt(x)}, ${fmt(y)}, ${fmt(z)}]`
+  return `位置：[${fmt(x)}, ${fmt(y)}, ${fmt(z)}]`
 }
 </script>
 

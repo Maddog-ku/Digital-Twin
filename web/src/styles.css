@@ -87,6 +87,12 @@ input {
   background: rgba(255, 255, 255, 0.1);
 }
 
+.topbar .danger {
+  background: rgba(255, 77, 77, 0.18);
+  border-color: rgba(255, 77, 77, 0.4);
+  color: #ffecec;
+}
+
 .content {
   display: grid;
   grid-template-columns: 1fr 360px;
@@ -119,4 +125,3 @@ input {
     width: 160px;
   }
 }
-
