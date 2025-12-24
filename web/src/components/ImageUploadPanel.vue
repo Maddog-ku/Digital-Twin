@@ -2,8 +2,8 @@
   <div class="card">
     <div class="head">
       <div>
-        <div class="title">圖片上傳產生 3D</div>
-        <div class="hint mono">POST /api/v1/auto_generate_from_image</div>
+        <div class="title">DXF 上傳產生 3D</div>
+        <div class="hint mono">POST /api/v1/auto_generate_from_dxf</div>
       </div>
       <div class="homeId">
         <div class="label">Home ID</div>
@@ -13,22 +13,10 @@
 
     <div class="grid">
       <label class="field">
-        <span>平面圖圖片（png/jpg）</span>
-        <input ref="fileInput" type="file" accept="image/*" @change="onFile" />
+        <span>平面圖 DXF 檔案</span>
+        <input ref="fileInput" type="file" accept=".dxf" @change="onFile" />
+        <div class="muted">僅支援 .dxf CAD 檔案</div>
         <div v-if="fileName" class="muted">已選擇：{{ fileName }}</div>
-      </label>
-      <label class="field">
-        <span>比例標定（實際長度，單位：公尺）</span>
-        <input
-          v-model.number="pixelToMeterRatio"
-          type="number"
-          step="0.01"
-          min="0.01"
-          placeholder="例：門寬 0.90"
-        />
-        <div class="muted">
-          將實際長度換算成 <span class="mono">pixel_to_meter_ratio</span> 傳給後端，避免模型失真。
-        </div>
       </label>
     </div>
 
@@ -57,14 +45,13 @@ const emit = defineEmits(['generated'])
 
 const fileInput = ref(null)
 const file = ref(null)
-const pixelToMeterRatio = ref(0.9)
 
 const submitting = ref(false)
 const status = ref('')
 const error = ref('')
 
 const ready = computed(() => {
-  return Boolean(file.value) && Number(pixelToMeterRatio.value) > 0
+  return Boolean(file.value)
 })
 
 const fileName = computed(() => (file.value ? `${file.value.name}（${fmtSize(file.value.size)}）` : ''))
@@ -77,14 +64,22 @@ function fmtSize(bytes) {
 }
 
 function onFile(event) {
-  file.value = event?.target?.files?.[0] || null
+  const picked = event?.target?.files?.[0] || null
+  if (picked && !picked.name.toLowerCase().endsWith('.dxf')) {
+    error.value = '僅支援 .dxf 檔案'
+    status.value = ''
+    file.value = null
+    if (fileInput.value) fileInput.value.value = ''
+    return
+  }
+
+  file.value = picked
   status.value = ''
   error.value = ''
 }
 
 function reset() {
   file.value = null
-  pixelToMeterRatio.value = 0.9
   status.value = ''
   error.value = ''
   if (fileInput.value) fileInput.value.value = ''
@@ -94,20 +89,19 @@ async function submit() {
   error.value = ''
   status.value = ''
   if (!ready.value) {
-    error.value = '請選擇圖片並填入比例'
+    error.value = '請選擇 DXF 檔案'
     return
   }
 
   const form = new FormData()
-  form.append('image', file.value)
-  form.append('pixel_to_meter_ratio', String(pixelToMeterRatio.value))
+  form.append('file', file.value)
   if (props.homeId) {
     form.append('home_id', props.homeId)
   }
 
   submitting.value = true
   try {
-    const resp = await api.autoGenerateFromImage(form)
+    const resp = await api.autoGenerateFromDxf(form)
     const meshId = resp?.result?.mesh_id || resp?.mesh_id
     if (!meshId) throw new Error('回應缺少 mesh_id')
 
@@ -173,7 +167,7 @@ async function submit() {
 
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 12px;
 }
 
@@ -193,14 +187,6 @@ input[type='file'] {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
   color: rgba(255, 255, 255, 0.9);
-}
-
-input[type='number'] {
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.25);
-  color: rgba(255, 255, 255, 0.92);
 }
 
 .muted {

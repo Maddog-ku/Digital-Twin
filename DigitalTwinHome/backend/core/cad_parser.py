@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from typing import Iterable, List
-from io import BytesIO
+import io
+import logging
 
 import ezdxf
 from shapely.geometry import LineString
 from shapely.ops import polygonize
+
+logger = logging.getLogger(__name__)
 
 
 class DxfToMeshParser:
@@ -15,19 +18,13 @@ class DxfToMeshParser:
         names = target_layer_names or ["WALL", "WALLS", "STRUCTURE"]
         self.target_layers = [name.upper() for name in names]
 
-    def parse(self, file_stream, level: int = 1, height: float = 3.0):
-        """讀取 DXF 並輸出樓層/房間資料。"""
-        # 接受 bytes、str 或類 file 物件
-        if hasattr(file_stream, "read"):
-            data = file_stream.read()
-        else:
-            data = file_stream
-        if isinstance(data, str):
-            data = data.encode("utf-8", errors="ignore")
-
+    def parse(self, file_content_str, level: int = 1, height: float = 3.0):
+        """讀取 DXF 字串並輸出樓層/房間資料。"""
         try:
-            doc = ezdxf.read(BytesIO(data))
+            stream = io.StringIO(file_content_str)
+            doc = ezdxf.read(stream)
         except Exception as e:
+            logger.error(f"Failed to read DXF content: {e}")
             raise ValueError(f"Invalid DXF file: {e}")
 
         msp = doc.modelspace()

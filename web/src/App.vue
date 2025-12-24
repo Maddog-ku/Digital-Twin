@@ -11,7 +11,9 @@
         </label>
         <button @click="refreshHomeConfig">重新載入設定</button>
         <button @click="loadLatestMesh">載入最新模型</button>
-        <button v-if="currentMeshId" class="danger" @click="removeCurrentModel">移除 3D 模型</button>
+        <button v-if="currentMeshId || meshData" class="danger" @click="removeCurrentModel">
+          移除 3D 模型
+        </button>
       </div>
     </header>
 
@@ -22,7 +24,7 @@
             3D 視圖
           </button>
           <button :class="{ active: sceneMode === 'upload' }" @click="sceneMode = 'upload'">
-            AI 圖片上傳
+            DXF 上傳
           </button>
         </div>
 
@@ -31,6 +33,7 @@
         </div>
         <template v-else>
           <TwinScene
+            ref="twinSceneRef"
             :meshData="meshData"
             :sensors="sensorList"
             :worldOffset="worldOffset"
@@ -43,7 +46,7 @@
 
           <div v-if="!meshData" class="hint">
             尚未載入模型。可透過 <span class="mono">/api/v1/generate_3d</span> 或
-            <span class="mono">/api/v1/auto_generate_from_image</span> 生成，接著載入
+            <span class="mono">/api/v1/auto_generate_from_dxf</span> 生成，接著載入
             <span class="mono">/api/v1/3d_model/latest</span>。
           </div>
         </template>
@@ -81,9 +84,8 @@
         />
         <FloorManager
           v-else
-          :homeId="homeId"
-          @update-mesh="loadMeshById"
-          @view-floor="viewFloor"
+          @floor-added="handleFloorAdded"
+          @toggle-floor="toggleFloorVisibility"
         />
       </aside>
     </main>
@@ -102,6 +104,7 @@ import TwinScene from './components/TwinScene.vue'
 import { api } from './services/api'
 import { createTwinSocket } from './services/socket'
 
+const twinSceneRef = ref(null)
 const homeId = ref('main_home_config')
 const meshData = ref(null)
 const meshInfo = ref(null)
@@ -299,9 +302,40 @@ function handleModelGenerated(model) {
   applyMeshModel(model)
 }
 
-function viewFloor(floor) {
+function normalizeMeshPayload(payload) {
+  if (!payload) return null
+  if (payload.data) return payload.data
+  if (payload.mesh_data) return payload.mesh_data
+  if (payload.mesh) return payload.mesh
+  return payload
+}
+
+function handleFloorAdded(floorData) {
+  console.log('收到新樓層數據:', floorData)
+  const normalized = normalizeMeshPayload(floorData)
+  if (normalized) {
+    meshData.value = normalized
+  }
+  if (floorData?.mesh_id) {
+    meshInfo.value = {
+      mesh_id: floorData.mesh_id,
+      mesh_format: floorData.mesh_format,
+      created_at: floorData.created_at,
+    }
+  } else {
+    meshInfo.value = null
+  }
+  if (twinSceneRef.value?.addFloorToScene) {
+    twinSceneRef.value.addFloorToScene(normalized || floorData)
+  }
   sceneMode.value = 'viewer'
   window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function toggleFloorVisibility(floorId) {
+  if (twinSceneRef.value?.toggleFloorVisibility) {
+    twinSceneRef.value.toggleFloorVisibility(floorId)
+  }
 }
 
 async function removeCurrentModel() {

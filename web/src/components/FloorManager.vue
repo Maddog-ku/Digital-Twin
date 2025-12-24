@@ -1,314 +1,245 @@
 <template>
-  <div class="floorManager">
-    <div class="head">
-      <div>
-        <div class="title">樓層管理</div>
-        <div class="hint mono">/api/v1/homes/{{ homeId }}/floors</div>
-      </div>
-      <div class="pill">{{ floors.length }} 層</div>
+  <div class="floor-manager-container">
+    <div class="panel-header">
+      <h2>樓層管理 (CAD 模式)</h2>
     </div>
 
-    <div v-if="loading" class="status mono">載入中…</div>
-    <div v-else-if="!floors.length" class="status mono">尚未新增樓層，請上傳圖片。</div>
-
-    <div v-else class="list">
-      <div v-for="floor in floors" :key="floor.level" class="item">
-        <div class="meta">
-          <div class="level">第 {{ floor.level }} 層</div>
-          <div class="muted mono">{{ floor.mesh_id || floor.full_mesh_id || '無 mesh_id' }}</div>
-        </div>
-        <div class="actions">
-          <button @click="viewFloor(floor)">檢視</button>
-          <button class="danger" @click="deleteFloor(floor.level)">刪除</button>
+    <div class="floor-list">
+      <div v-for="floor in floors" :key="floor.id" class="floor-item">
+        <span class="floor-name">第 {{ floor.level }} 層</span>
+        <div class="floor-actions">
+          <button @click="$emit('toggle-floor', floor.id)">👁️</button>
         </div>
       </div>
     </div>
 
-    <div class="divider" />
+    <div class="upload-section">
+      <h3>📂 匯入新樓層</h3>
 
-    <div class="add">
-      <div class="title">新增樓層</div>
-      <div class="row">
-        <label>
-          <span>層數</span>
-          <select v-model.number="newFloorLevel">
-            <option :value="1">1F</option>
-            <option :value="2">2F</option>
-            <option :value="3">3F</option>
-            <option :value="4">4F</option>
-          </select>
-        </label>
-        <label>
-          <span>比例 (pixel_to_meter_ratio)</span>
-          <input v-model.number="scaleRatio" type="number" step="0.001" min="0.001" />
-        </label>
-        <label>
-          <span>樓層高度 (m)</span>
-          <input v-model.number="floorHeight" type="number" step="0.1" min="0.1" />
-        </label>
+      <div class="input-group">
+        <label>選擇 DXF 檔案</label>
+        <input
+          type="file"
+          ref="fileInput"
+          accept=".dxf"
+          @change="handleFileSelect"
+        />
+        <p v-if="selectedFile" class="file-name">已選擇: {{ selectedFile.name }}</p>
       </div>
-      <label class="file">
-        <span>平面圖圖片</span>
-        <input type="file" accept="image/*" @change="handleFileSelect" />
-        <div v-if="selectedFile" class="muted">{{ selectedFile.name }}</div>
-      </label>
-      <div class="cta">
-        <button class="primary" :disabled="!selectedFile || uploading" @click="uploadFloor">
-          {{ uploading ? '上傳中…' : '上傳並堆疊' }}
-        </button>
+
+      <div class="settings-grid">
+        <div class="input-group">
+          <label>樓層 (Level)</label>
+          <input type="number" v-model.number="form.level" min="1" />
+        </div>
+
+        <div class="input-group">
+          <label>樓高 (Height - m)</label>
+          <input type="number" v-model.number="form.height" step="0.1" />
+        </div>
+
+        <div class="input-group">
+          <label>牆壁圖層 (Layer Name)</label>
+          <input
+            type="text"
+            v-model="form.targetLayer"
+            placeholder="例如: WALL"
+          />
+          <small class="hint">請輸入 CAD 中畫牆壁的圖層名稱</small>
+        </div>
       </div>
-      <div v-if="error" class="error mono">{{ error }}</div>
+
+      <button
+        class="upload-btn"
+        :disabled="!selectedFile || isProcessing"
+        @click="uploadDxf"
+      >
+        <span v-if="isProcessing">處理中...</span>
+        <span v-else>生成 3D 模型</span>
+      </button>
+
+      <p v-if="errorMessage" class="error-msg">{{ errorMessage }}</p>
     </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { reactive, ref } from 'vue'
+import axios from 'axios'
 
-import { api } from '../services/api'
-
-const props = defineProps({
-  homeId: { type: String, required: true },
-})
-
-const emit = defineEmits(['update-mesh', 'view-floor'])
+const emit = defineEmits(['floor-added', 'toggle-floor'])
 
 const floors = ref([])
-const loading = ref(false)
-const uploading = ref(false)
-const error = ref('')
-
-const newFloorLevel = ref(1)
 const selectedFile = ref(null)
-const scaleRatio = ref(0.01)
-const floorHeight = ref(3.0)
+const isProcessing = ref(false)
+const errorMessage = ref('')
+const fileInput = ref(null)
 
-async function fetchFloors() {
-  loading.value = true
-  error.value = ''
-  try {
-    const res = await api.listFloors(props.homeId)
-    floors.value = Array.isArray(res?.floors) ? [...res.floors].sort((a, b) => a.level - b.level) : []
-  } catch (e) {
-    error.value = e?.response?.data?.error || e?.message || '無法取得樓層列表'
-  } finally {
-    loading.value = false
-  }
-}
-
-function handleFileSelect(event) {
-  selectedFile.value = event?.target?.files?.[0] || null
-}
-
-async function uploadFloor() {
-  if (!selectedFile.value) return
-  uploading.value = true
-  error.value = ''
-  try {
-    const form = new FormData()
-    form.append('image', selectedFile.value)
-    form.append('level', newFloorLevel.value)
-    form.append('pixel_to_meter_ratio', scaleRatio.value)
-    form.append('height', floorHeight.value)
-
-    const res = await api.uploadFloor(props.homeId, form)
-    const floorInfo = {
-      level: Number(newFloorLevel.value),
-      ...(res?.floor || res || {}),
-    }
-
-    const existingIdx = floors.value.findIndex((f) => Number(f.level) === floorInfo.level)
-    if (existingIdx !== -1) floors.value.splice(existingIdx, 1)
-    floors.value.push(floorInfo)
-    floors.value.sort((a, b) => Number(a.level) - Number(b.level))
-
-    const fullMeshId = res?.full_mesh_id || res?.mesh_id || floorInfo?.mesh_id
-    if (fullMeshId) emit('update-mesh', fullMeshId)
-
-    // auto prep next level
-    newFloorLevel.value = floorInfo.level + 1
-    selectedFile.value = null
-  } catch (e) {
-    error.value = e?.response?.data?.error || e?.message || '上傳樓層失敗'
-  } finally {
-    uploading.value = false
-  }
-}
-
-async function deleteFloor(level) {
-  if (!window.confirm(`刪除第 ${level} 層？`)) return
-  try {
-    await api.deleteFloor(props.homeId, level)
-    floors.value = floors.value.filter((f) => Number(f.level) !== Number(level))
-    const remaining = floors.value[0]
-    const meshId = remaining?.full_mesh_id || remaining?.mesh_id
-    if (meshId) emit('update-mesh', meshId)
-  } catch (e) {
-    error.value = e?.response?.data?.error || e?.message || '刪除樓層失敗'
-  }
-}
-
-function viewFloor(floor) {
-  emit('view-floor', floor)
-  const meshId = floor?.full_mesh_id || floor?.mesh_id
-  if (meshId) emit('update-mesh', meshId)
-}
-
-onMounted(() => {
-  fetchFloors()
+const form = reactive({
+  level: 1,
+  height: 3.0,
+  targetLayer: 'WALL',
 })
+
+const handleFileSelect = (event) => {
+  const file = event.target.files[0]
+  errorMessage.value = ''
+
+  if (!file) return
+
+  if (!file.name.toLowerCase().endsWith('.dxf')) {
+    errorMessage.value = '錯誤：請上傳 .dxf 格式的 CAD 檔案'
+    selectedFile.value = null
+    event.target.value = ''
+    return
+  }
+
+  selectedFile.value = file
+}
+
+const uploadDxf = async () => {
+  if (!selectedFile.value) return
+
+  isProcessing.value = true
+  errorMessage.value = ''
+
+  const formData = new FormData()
+  formData.append('file', selectedFile.value)
+  formData.append('level', form.level)
+  formData.append('height', form.height)
+  formData.append('target_layers', form.targetLayer)
+
+  try {
+    const response = await axios.post(
+      'http://localhost:5050/api/v1/auto_generate_from_dxf',
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    )
+
+    const newFloorData = response.data.data
+
+    floors.value.push({
+      id: newFloorData.id,
+      level: newFloorData.level,
+      raw: newFloorData,
+    })
+
+    floors.value.sort((a, b) => a.level - b.level)
+
+    emit('floor-added', newFloorData)
+
+    form.level += 1
+    selectedFile.value = null
+    if (fileInput.value) fileInput.value.value = ''
+    alert('匯入成功！')
+  } catch (error) {
+    console.error(error)
+    const msg = error.response?.data?.error || '上傳失敗，請檢查後端連線'
+    errorMessage.value = msg
+  } finally {
+    isProcessing.value = false
+  }
+}
 </script>
 
 <style scoped>
-.floorManager {
-  padding: 14px;
-  display: grid;
-  gap: 12px;
+.floor-manager-container {
+  padding: 20px;
+  background: #1e1e1e;
+  color: #fff;
+  border-radius: 8px;
+  max-width: 400px;
 }
 
-.head {
+.panel-header h2 {
+  margin: 0 0 10px 0;
+}
+
+.floor-list {
+  margin-bottom: 20px;
+}
+
+.floor-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.title {
-  font-weight: 800;
-}
-
-.hint {
-  color: rgba(255, 255, 255, 0.65);
-  font-size: 12px;
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
-    'Courier New', monospace;
-}
-
-.pill {
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(96, 165, 250, 0.16);
-  border: 1px solid rgba(96, 165, 250, 0.45);
-  font-size: 12px;
-}
-
-.list {
-  display: grid;
-  gap: 10px;
-}
-
-.item {
   padding: 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  background: #2a2a2a;
+  border-radius: 6px;
+  margin-bottom: 8px;
 }
 
-.meta {
-  display: grid;
-  gap: 4px;
-}
-
-.level {
-  font-weight: 700;
-}
-
-.muted {
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 12px;
-}
-
-.actions {
-  display: flex;
-  gap: 8px;
-}
-
-button {
-  padding: 7px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.9);
+.floor-actions button {
+  background: transparent;
+  border: none;
+  color: #fff;
   cursor: pointer;
 }
 
-.danger {
-  background: rgba(255, 77, 77, 0.18);
-  border-color: rgba(255, 77, 77, 0.35);
+.upload-section h3 {
+  margin-top: 0;
 }
 
-.divider {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.add {
-  display: grid;
-  gap: 10px;
-}
-
-.row {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: 1fr 1fr 1fr;
-}
-
-label {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.85);
-}
-
-select,
-input[type='number'],
-input[type='file'] {
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(0, 0, 0, 0.2);
-  color: rgba(255, 255, 255, 0.92);
-}
-
-.file {
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 12px;
-  padding: 10px;
-}
-
-.cta {
+.input-group {
+  margin-bottom: 15px;
   display: flex;
+  flex-direction: column;
+}
+
+.input-group label {
+  font-size: 0.9em;
+  color: #aaa;
+  margin-bottom: 5px;
+}
+
+.input-group input {
+  padding: 8px;
+  background: #333;
+  border: 1px solid #555;
+  color: white;
+  border-radius: 4px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
 
-.primary {
-  background: rgba(96, 165, 250, 0.2);
-  border-color: rgba(96, 165, 250, 0.45);
+.upload-btn {
+  width: 100%;
+  padding: 10px;
+  background-color: #4caf50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
 }
 
-.status {
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+.upload-btn:disabled {
+  background-color: #555;
+  cursor: not-allowed;
 }
 
-.error {
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 77, 77, 0.25);
-  background: rgba(255, 77, 77, 0.08);
+.error-msg {
+  color: #ff6b6b;
+  font-size: 0.9em;
+  margin-top: 10px;
 }
 
-@media (max-width: 980px) {
-  .row {
-    grid-template-columns: 1fr;
-  }
+.hint {
+  font-size: 0.8em;
+  color: #666;
+}
+
+.file-name {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  color: #b3b3b3;
 }
 </style>

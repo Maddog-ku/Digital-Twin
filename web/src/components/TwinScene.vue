@@ -3,7 +3,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, watch, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch, ref } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
@@ -40,6 +40,8 @@ let floorMesh = null
 let wallsMesh = null
 let ceilingMesh = null
 let layerMeshes = []
+const meshOverride = ref(null)
+const hiddenLayerIds = new Set()
 
 const sensorMeshes = new Map()
 let sharedSensorGeometry = null
@@ -48,6 +50,16 @@ const roomOverlayMeshes = new Map() // room_id -> Mesh
 let alertRoomIds = new Set()
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
+
+function normalizeMeshPayload(payload) {
+  if (!payload) return null
+  if (payload.data) return payload.data
+  if (payload.mesh_data) return payload.mesh_data
+  if (payload.mesh) return payload.mesh
+  return payload
+}
+
+const activeMeshData = computed(() => meshOverride.value || props.meshData)
 
 function initThree() {
   scene = new THREE.Scene()
@@ -187,6 +199,7 @@ function clearScene() {
 
   disposeRoomOverlays()
   clearSensorMeshes()
+  hiddenLayerIds.clear()
 }
 
 function makeMaterial(colorHex, { wireframe = false, opacity = 1.0 } = {}) {
@@ -214,17 +227,20 @@ function setControlMode(mode) {
 function rebuildModel() {
   clearScene()
 
-  if (!props.meshData) return
+  const meshData = activeMeshData.value
+  if (!meshData) return
 
   const wireframe = Boolean(props.visibility?.wireframe)
 
-  if (Array.isArray(props.meshData.layers) && props.meshData.layers.length) {
+  if (Array.isArray(meshData.layers) && meshData.layers.length) {
     const wallOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.wallOpacity ?? 1)))
     const floorOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.floorOpacity ?? 1)))
     const ceilingOpacity = Math.max(0.1, Math.min(1, Number(props.visibility?.ceilingOpacity ?? floorOpacity)))
 
-    for (const layer of props.meshData.layers) {
+    for (const layer of meshData.layers) {
       const zOffset = Number(layer?.z_offset || 0)
+      const layerId = layer?.id ?? layer?.layer_id ?? layer?.level ?? layer?.name ?? null
+      const layerKey = layerId != null ? String(layerId) : null
 
       if (layer.floor) {
         const geometry = buildGeometry(layer.floor)
@@ -232,9 +248,10 @@ function rebuildModel() {
         const mesh = new THREE.Mesh(geometry, material)
         mesh.position.y = zOffset
         mesh.receiveShadow = true
-        mesh.visible = Boolean(props.visibility?.floor)
+        mesh.visible = Boolean(props.visibility?.floor) && (!layerKey || !hiddenLayerIds.has(layerKey))
+        mesh.userData.layerId = layerKey
         meshGroup.add(mesh)
-        layerMeshes.push({ mesh, type: 'floor' })
+        layerMeshes.push({ mesh, type: 'floor', layerId: layerKey })
       }
 
       if (layer.walls) {
@@ -244,9 +261,10 @@ function rebuildModel() {
         mesh.position.y = zOffset
         mesh.castShadow = true
         mesh.receiveShadow = true
-        mesh.visible = Boolean(props.visibility?.walls)
+        mesh.visible = Boolean(props.visibility?.walls) && (!layerKey || !hiddenLayerIds.has(layerKey))
+        mesh.userData.layerId = layerKey
         meshGroup.add(mesh)
-        layerMeshes.push({ mesh, type: 'walls' })
+        layerMeshes.push({ mesh, type: 'walls', layerId: layerKey })
       }
 
       if (layer.ceiling) {
@@ -255,13 +273,14 @@ function rebuildModel() {
         const mesh = new THREE.Mesh(geometry, material)
         mesh.position.y = zOffset
         mesh.receiveShadow = true
-        mesh.visible = Boolean(props.visibility?.ceiling)
+        mesh.visible = Boolean(props.visibility?.ceiling) && (!layerKey || !hiddenLayerIds.has(layerKey))
+        mesh.userData.layerId = layerKey
         meshGroup.add(mesh)
-        layerMeshes.push({ mesh, type: 'ceiling' })
+        layerMeshes.push({ mesh, type: 'ceiling', layerId: layerKey })
       }
     }
-  } else if (props.meshData.floor) {
-    const geometry = buildGeometry(props.meshData.floor)
+  } else if (meshData.floor) {
+    const geometry = buildGeometry(meshData.floor)
     const material = makeMaterial(0x2d6a4f, { wireframe })
     floorMesh = new THREE.Mesh(geometry, material)
     floorMesh.receiveShadow = true
@@ -269,8 +288,8 @@ function rebuildModel() {
     meshGroup.add(floorMesh)
   }
 
-  if (props.meshData.walls) {
-    const geometry = buildGeometry(props.meshData.walls)
+  if (meshData.walls) {
+    const geometry = buildGeometry(meshData.walls)
     const material = makeMaterial(0xf3f4f6, { wireframe })
     wallsMesh = new THREE.Mesh(geometry, material)
     wallsMesh.castShadow = true
@@ -279,8 +298,8 @@ function rebuildModel() {
     meshGroup.add(wallsMesh)
   }
 
-  if (props.meshData.ceiling) {
-    const geometry = buildGeometry(props.meshData.ceiling)
+  if (meshData.ceiling) {
+    const geometry = buildGeometry(meshData.ceiling)
     const material = makeMaterial(0xd1d5db, { wireframe, opacity: 0.7 })
     ceilingMesh = new THREE.Mesh(geometry, material)
     ceilingMesh.receiveShadow = true
@@ -389,7 +408,8 @@ function triangulateEarClipping(ringIn) {
 
 function rebuildRoomOverlays() {
   disposeRoomOverlays()
-  const rooms = props.meshData?.metadata?.rooms
+  const meshData = activeMeshData.value
+  const rooms = meshData?.metadata?.rooms
   if (!rooms || typeof rooms !== 'object') return
 
   const xOff = Number(props.worldOffset?.x || 0)
@@ -523,6 +543,22 @@ function updateSensors() {
   }
 }
 
+function addFloorToScene(floorData) {
+  const normalized = normalizeMeshPayload(floorData)
+  meshOverride.value = normalized
+  rebuildModel()
+  rebuildRoomOverlays()
+  updateVisibility()
+}
+
+function toggleFloorVisibility(floorId) {
+  if (floorId === undefined || floorId === null) return
+  const key = String(floorId)
+  if (hiddenLayerIds.has(key)) hiddenLayerIds.delete(key)
+  else hiddenLayerIds.add(key)
+  updateVisibility()
+}
+
 function updateVisibility() {
   if (floorMesh) floorMesh.visible = Boolean(props.visibility?.floor)
   if (wallsMesh) wallsMesh.visible = Boolean(props.visibility?.walls)
@@ -559,16 +595,17 @@ function updateVisibility() {
     for (const entry of layerMeshes) {
       const m = entry.mesh
       if (!m?.material) continue
+      const hidden = entry.layerId && hiddenLayerIds.has(entry.layerId)
       if (entry.type === 'floor') {
-        m.visible = Boolean(props.visibility?.floor)
+        m.visible = Boolean(props.visibility?.floor) && !hidden
         m.material.opacity = floorOpacity
         m.material.transparent = floorOpacity < 1 || m.material.wireframe
       } else if (entry.type === 'walls') {
-        m.visible = Boolean(props.visibility?.walls)
+        m.visible = Boolean(props.visibility?.walls) && !hidden
         m.material.opacity = wallOpacity
         m.material.transparent = wallOpacity < 1 || m.material.wireframe
       } else if (entry.type === 'ceiling') {
-        m.visible = Boolean(props.visibility?.ceiling)
+        m.visible = Boolean(props.visibility?.ceiling) && !hidden
         m.material.opacity = ceilingOpacity
         m.material.transparent = ceilingOpacity < 1 || m.material.wireframe
       }
@@ -657,6 +694,13 @@ onBeforeUnmount(() => {
 
 watch(
   () => props.meshData,
+  () => {
+    meshOverride.value = null
+  }
+)
+
+watch(
+  () => activeMeshData.value,
   (val) => {
     if (!val) {
       clearScene()
@@ -686,6 +730,11 @@ watch(
   () => updateVisibility(),
   { deep: true }
 )
+
+defineExpose({
+  addFloorToScene,
+  toggleFloorVisibility,
+})
 </script>
 
 <style scoped>

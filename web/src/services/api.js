@@ -28,8 +28,8 @@ export const api = {
     return data
   },
 
-  async autoGenerateFromImage(formData) {
-    const { data } = await client.post('/api/v1/auto_generate_from_image', formData, {
+  async autoGenerateFromDxf(formData) {
+    const { data } = await client.post('/api/v1/auto_generate_from_dxf', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     return data
